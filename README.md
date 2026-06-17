@@ -90,9 +90,12 @@ ssh root@你的服务器IP
 
 如果你不是 `root`，把 `root` 换成你自己的用户名。
 
-### 2. 拉项目
+### 2. 从 GitHub 拉项目
+
+直接复制这几行：
 
 ```bash
+cd /opt
 git clone https://github.com/koajsj/onlinemsg2.git
 cd onlinemsg2
 ```
@@ -102,6 +105,12 @@ cd onlinemsg2
 ```bash
 apt update && apt install -y git
 ```
+
+上面这三行的意思就是：
+
+1. 先进入 `/opt`
+2. 从 GitHub 拉下项目
+3. 进入项目目录
 
 ### 3. 直接部署
 
