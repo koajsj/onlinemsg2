@@ -138,7 +138,7 @@ http://257823.xyz:8080
 以后更新代码就跑下面这两句：
 
 ```bash
-cd ~/onlinemsg2
+cd /opt/onlinemsg2
 git pull && sudo bash update.sh
 ```
 
@@ -168,6 +168,7 @@ sudo bash deploy.sh
 更新：
 
 ```bash
+cd /opt/onlinemsg2
 git pull && sudo bash update.sh
 ```
 

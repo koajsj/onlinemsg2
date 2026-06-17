@@ -1,6 +1,7 @@
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 ENV_EXAMPLE_FILE="${ENV_EXAMPLE_FILE:-$ROOT_DIR/.env.example}"
 COMMON_SCRIPT_NAME="${COMMON_SCRIPT_NAME:-脚本}"
+APT_UPDATED="${APT_UPDATED:-0}"
 
 require_command() {
   local command_name="$1"
@@ -26,6 +27,13 @@ ensure_apt_package() {
     exit 1
   fi
 
+  if [ "$APT_UPDATED" != "1" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    echo "安装系统依赖前先刷新软件源..."
+    apt-get update
+    APT_UPDATED=1
+  fi
+
   apt-get install -y "$package_name"
 }
 
@@ -34,11 +42,7 @@ ensure_base_environment() {
     return
   fi
 
-  if is_root; then
-    export DEBIAN_FRONTEND=noninteractive
-    echo "检查基础环境..."
-    apt-get update
-  fi
+  echo "检查基础环境..."
 
   if ! command -v git >/dev/null 2>&1; then
     ensure_apt_package git

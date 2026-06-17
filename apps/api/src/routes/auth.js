@@ -25,12 +25,6 @@ router.post(
       throw new Error('账号已存在');
     }
 
-    await ensureOpenImUser({
-      userId: username,
-      nickname: input.nickname,
-      avatarUrl: ''
-    });
-
     const user = await addUser({
       userId: username,
       username,

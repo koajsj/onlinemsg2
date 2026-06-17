@@ -39,7 +39,6 @@ const showEmoji = ref(false);
 const unlockPassword = ref('');
 const setupPassword = ref('');
 const adminOpen = ref(false);
-const showSettings = ref(true);
 const adminLoading = ref(false);
 const credentialsLoading = ref(false);
 
