@@ -1,0 +1,15 @@
+node_modules
+dist
+apps/web/dist
+.vite
+.env
+.DS_Store
+Thumbs.db
+*.log
+data/runtime
+data/uploads
+data/components
+data/*.db
+data/*.sqlite
+apps/api/.env
+apps/web/.env

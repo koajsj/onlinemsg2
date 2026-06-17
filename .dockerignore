@@ -1,0 +1,10 @@
+node_modules
+apps/web/dist
+.vite
+data/runtime
+data/uploads
+data/components
+.env
+npm-debug.log
+.git
+*.log
