@@ -28,8 +28,6 @@ export const findUserByUsername = username =>
 export const findUserById = userId =>
   db.data.users.find(user => user.userId === userId) || null;
 
-export const listUsers = () => db.data.users.map(authUser);
-
 export const listPublicUsers = () => db.data.users.map(authUser);
 
 export const addUser = async input => {

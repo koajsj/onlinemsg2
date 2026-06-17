@@ -12,6 +12,7 @@ import {
   registerSuccessfulLogin,
   verifyPassword
 } from '../lib/security.js';
+import { cleanText } from '../lib/utils.js';
 import { addUser } from '../lib/store.js';
 
 const router = express.Router();
@@ -21,6 +22,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = registerSchema.parse(req.body);
     const username = input.username.toLowerCase();
+    const nickname = cleanText(input.nickname, 32) || username;
     if (findUserByUsername(username)) {
       throw new Error('账号已存在');
     }
@@ -28,7 +30,7 @@ router.post(
     const user = await addUser({
       userId: username,
       username,
-      nickname: input.nickname,
+      nickname,
       password: input.password,
       publicKey: input.publicKey,
       role: 'user'

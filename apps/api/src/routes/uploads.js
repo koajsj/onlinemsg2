@@ -6,7 +6,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { asyncHandler } from '../middleware/error.js';
-import { addUpload, getUpload } from '../lib/store.js';
+import { addUpload, findUserById, getUpload } from '../lib/store.js';
 import { cleanText } from '../lib/utils.js';
 
 const router = express.Router();
@@ -37,6 +37,8 @@ const allowedMimeTypes = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ]);
 
+const isImageMimeType = mimeType => mimeType.startsWith('image/');
+
 router.post(
   '/',
   upload.single('file'),
@@ -51,16 +53,38 @@ router.post(
       return;
     }
 
+    const peerUser = findUserById(input.peerUserId);
+    if (!peerUser) {
+      res.status(400).json({ message: '接收方不存在' });
+      return;
+    }
+
+    if (input.peerUserId === req.user.userId) {
+      res.status(400).json({ message: '不能把文件发送给自己' });
+      return;
+    }
+
+    if (input.category === 'image' && !isImageMimeType(input.originalMime)) {
+      res.status(400).json({ message: '图片消息的文件类型不正确' });
+      return;
+    }
+
+    if (input.category === 'file' && isImageMimeType(input.originalMime)) {
+      res.status(400).json({ message: '图片文件请按图片消息发送' });
+      return;
+    }
+
     const uploadId = crypto.randomUUID();
     const storedName = `${uploadId}.bin`;
     const filePath = path.join(config.uploadDir, storedName);
+    const originalName = cleanText(input.originalName, 200);
     await fs.writeFile(filePath, req.file.buffer);
 
     await addUpload({
       id: uploadId,
       ownerId: req.user.userId,
       allowedUserIds: [input.peerUserId.toLowerCase()],
-      originalName: cleanText(input.originalName, 200),
+      originalName,
       storedName,
       mimeType: input.originalMime,
       size: req.file.size,
@@ -73,7 +97,7 @@ router.post(
         size: req.file.size,
         mimeType: input.originalMime,
         category: input.category,
-        originalName: input.originalName
+        originalName
       }
     });
   })

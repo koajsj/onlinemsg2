@@ -13,14 +13,6 @@ export const cleanText = (value, maxLength = 200) => {
   return text.slice(0, maxLength);
 };
 
-export const safeJsonParse = (value, fallback = null) => {
-  try {
-    return JSON.parse(value);
-  } catch (_error) {
-    return fallback;
-  }
-};
-
 export const getIpAddress = req => {
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.trim()) {
@@ -60,5 +52,3 @@ export const authUser = user => ({
   ...publicUser(user),
   isAdmin: user.role === 'admin'
 });
-
-export const ensureArray = value => (Array.isArray(value) ? value : []);
