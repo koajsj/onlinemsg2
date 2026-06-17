@@ -30,8 +30,9 @@
 apps/
   api/        业务 API、管理员接口、上传、审计、密钥封装
   web/        Vue3 + Vite 前端
-nginx/        前端入口和反向代理
-scripts/      容器初始化脚本
+ops/
+  nginx/      Nginx 反向代理配置
+  mongo/      Mongo 初始化脚本
 data/         运行数据和上传目录
 docker-compose.yml
 deploy.sh
@@ -356,3 +357,5 @@ curl http://127.0.0.1:8080/api/health
 2. [deploy.sh](/C:/Users/Administrator/Desktop/onlinemsg2/deploy.sh)
 3. [update.sh](/C:/Users/Administrator/Desktop/onlinemsg2/update.sh)
 4. [.env.example](/C:/Users/Administrator/Desktop/onlinemsg2/.env.example)
+5. [ops/nginx/default.conf](/C:/Users/Administrator/Desktop/onlinemsg2/ops/nginx/default.conf)
+6. [ops/mongo/init-mongo.js](/C:/Users/Administrator/Desktop/onlinemsg2/ops/mongo/init-mongo.js)

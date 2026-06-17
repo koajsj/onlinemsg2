@@ -11,5 +11,5 @@ RUN npm run build --workspace apps/web
 
 FROM nginx:1.27-alpine
 
-COPY nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY ops/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
