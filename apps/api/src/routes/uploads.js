@@ -119,7 +119,16 @@ router.get(
     }
 
     const filePath = path.join(config.uploadDir, uploadInfo.storedName);
-    const data = await fs.readFile(filePath);
+    let data;
+    try {
+      data = await fs.readFile(filePath);
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        res.status(404).json({ message: '文件不存在或已丢失' });
+        return;
+      }
+      throw error;
+    }
     res.setHeader('content-type', 'application/octet-stream');
     res.setHeader('x-original-name', encodeURIComponent(uploadInfo.originalName));
     res.send(data);

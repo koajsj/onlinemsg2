@@ -111,6 +111,21 @@ const secureParticipants = computed(() => {
 
 const eventBindings = [];
 
+const isStrongLocalPassword = password =>
+  typeof password === 'string' &&
+  password.length >= 8 &&
+  /[A-Za-z]/.test(password) &&
+  /\d/.test(password);
+
+const revokeAttachmentUrl = messageId => {
+  if (!attachmentUrls[messageId]) {
+    return;
+  }
+
+  URL.revokeObjectURL(attachmentUrls[messageId]);
+  delete attachmentUrls[messageId];
+};
+
 const applyTheme = () => {
   const dark = profileForm.theme === 'dark' || (profileForm.theme === 'system' && profileForm.darkMode);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -231,6 +246,7 @@ const ensureAttachment = async uiMessage => {
     mimeType: uiMessage.mimeType
   });
 
+  revokeAttachmentUrl(uiMessage.id);
   attachmentUrls[uiMessage.id] = objectUrl;
 };
 
@@ -528,6 +544,11 @@ const updateCredentials = async () => {
 };
 
 const unlockEncryption = async () => {
+  if (!unlockPassword.value.trim()) {
+    error.value = '请输入当前密码后再解锁';
+    return;
+  }
+
   try {
     await unlockPrivateKey(currentUser.value.username, unlockPassword.value);
     unlockPassword.value = '';
@@ -540,6 +561,11 @@ const unlockEncryption = async () => {
 };
 
 const setupEncryption = async () => {
+  if (!isStrongLocalPassword(setupPassword.value)) {
+    error.value = '本机密钥密码至少 8 位，且必须包含字母和数字';
+    return;
+  }
+
   try {
     const publicKey = await generateAndStoreUserKeys(currentUser.value.username, setupPassword.value);
     const response = await apiRequest('/users/me', {
@@ -674,6 +700,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   for (const [event, handler] of eventBindings) {
     sdk.off(event, handler);
+  }
+
+  for (const messageId of Object.keys(attachmentUrls)) {
+    revokeAttachmentUrl(messageId);
   }
 });
 
