@@ -60,22 +60,23 @@ http://257823.xyz:8080
 
 你不用手动写 `.env`，也不用自己填 JWT 密钥、Mongo 密码、Redis 密码、MinIO 密码。
 
-直接跑：
+拉完项目后，直接跑：
 
 ```bash
-bash deploy.sh
+sudo bash deploy.sh
 ```
 
 脚本会自动：
 
 1. 创建 `.env`
 2. 补齐缺失配置
-3. 生成随机密钥和随机密码
-4. 校验端口冲突
-5. 校验 `docker compose` 配置
-6. 拉镜像并启动服务
-7. 检查容器状态
-8. 检查首页和 `/api/health`
+3. 在 Ubuntu / Debian 上自动补装 `git`、`curl`、证书和 Docker
+4. 生成随机密钥和随机密码
+5. 校验端口冲突
+6. 校验 `docker compose` 配置
+7. 拉镜像并启动服务
+8. 检查容器状态
+9. 检查首页和 `/api/health`
 
 ## VPS 首次部署
 
@@ -89,30 +90,26 @@ ssh root@你的服务器IP
 
 如果你不是 `root`，把 `root` 换成你自己的用户名。
 
-### 2. 安装基础环境
-
-```bash
-apt update
-apt install -y git curl ca-certificates
-curl -fsSL https://get.docker.com | sh
-docker --version
-docker compose version
-```
-
-看到版本号就说明 Docker 装好了。
-
-### 3. 拉项目
+### 2. 拉项目
 
 ```bash
 git clone https://github.com/koajsj/onlinemsg2.git
 cd onlinemsg2
 ```
 
-### 4. 直接部署
+如果你的服务器连 `git clone` 都跑不了，先在机器上补一个 Git：
 
 ```bash
-bash deploy.sh
+apt update && apt install -y git
 ```
+
+### 3. 直接部署
+
+```bash
+sudo bash deploy.sh
+```
+
+这一步会自动安装剩下的基础环境，不需要你再手动装 Docker。
 
 部署成功后，直接打开：
 
@@ -132,7 +129,7 @@ http://257823.xyz:8080
 
 ```bash
 cd ~/onlinemsg2
-git pull && bash update.sh
+git pull && sudo bash update.sh
 ```
 
 `update.sh` 会自动做这些事：
@@ -140,12 +137,13 @@ git pull && bash update.sh
 1. 拉最新代码
 2. 自动补齐 `.env`
 3. 自动生成缺失的随机密钥
-4. 安装依赖
-5. 构建前端
-6. 拉镜像
-7. 重建并重启服务
-8. 检查容器状态
-9. 检查首页和 `/api/health`
+4. 必要时自动补装基础环境
+5. 安装依赖
+6. 构建前端
+7. 拉镜像
+8. 重建并重启服务
+9. 检查容器状态
+10. 检查首页和 `/api/health`
 
 如果你的 VPS 没装 `npm`，脚本会自动改用 Docker 里的 Node 容器安装和构建。
 
@@ -154,13 +152,13 @@ git pull && bash update.sh
 首次部署：
 
 ```bash
-bash deploy.sh
+sudo bash deploy.sh
 ```
 
 更新：
 
 ```bash
-git pull && bash update.sh
+git pull && sudo bash update.sh
 ```
 
 看状态：

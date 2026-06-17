@@ -24,6 +24,68 @@ require_command() {
   fi
 }
 
+is_root() {
+  [ "$(id -u)" -eq 0 ]
+}
+
+ensure_apt_package() {
+  local package_name="$1"
+  if dpkg -s "$package_name" >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! is_root; then
+    echo "缺少系统包：$package_name。请用 root 执行 deploy.sh，让脚本自动安装。" >&2
+    exit 1
+  fi
+
+  apt-get install -y "$package_name"
+}
+
+ensure_base_environment() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return
+  fi
+
+  if is_root; then
+    export DEBIAN_FRONTEND=noninteractive
+    echo "检查基础环境..."
+    apt-get update
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    ensure_apt_package git
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    ensure_apt_package curl
+  fi
+
+  ensure_apt_package ca-certificates
+
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! is_root; then
+    echo "缺少 Docker 或 docker compose。请用 root 执行 deploy.sh，让脚本自动安装。" >&2
+    exit 1
+  fi
+
+  echo "自动安装 Docker..."
+  curl -fsSL https://get.docker.com | sh
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker 安装失败。" >&2
+    exit 1
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "docker compose 插件不可用，请检查 Docker 安装结果。" >&2
+    exit 1
+  fi
+}
+
 random_string() {
   local length="${1:-48}"
   local output=''
@@ -240,6 +302,8 @@ wait_for_http() {
 }
 
 mkdir -p data/runtime data/uploads data/components/{mongodb/db,redis,kafka,etcd,minio}
+
+ensure_base_environment
 
 require_command docker "请先安装 Docker。"
 if ! docker compose version >/dev/null 2>&1; then
