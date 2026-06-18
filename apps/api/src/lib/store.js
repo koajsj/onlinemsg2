@@ -17,16 +17,39 @@ const defaultData = {
 
 export const db = await JSONFilePreset(dbFile, defaultData);
 
+const userByUsername = new Map();
+const userByUserId = new Map();
+const loginAttemptMap = new Map();
+
+const rebuildUserIndexes = () => {
+  userByUsername.clear();
+  userByUserId.clear();
+  for (const user of db.data.users) {
+    userByUsername.set(user.username, user);
+    userByUserId.set(user.userId, user);
+  }
+};
+
+const rebuildLoginAttemptIndex = () => {
+  loginAttemptMap.clear();
+  for (const item of db.data.loginAttempts) {
+    loginAttemptMap.set(`${item.username}:${item.ipAddress}`, item);
+  }
+};
+
+rebuildUserIndexes();
+rebuildLoginAttemptIndex();
+
 const touch = user => {
   user.updatedAt = nowIso();
   return user;
 };
 
 export const findUserByUsername = username =>
-  db.data.users.find(user => user.username === username.toLowerCase()) || null;
+  userByUsername.get(username.toLowerCase()) || null;
 
 export const findUserById = userId =>
-  db.data.users.find(user => user.userId === userId) || null;
+  userByUserId.get(userId) || null;
 
 export const listPublicUsers = () => db.data.users.map(authUser);
 
@@ -53,6 +76,8 @@ export const addUser = async input => {
   };
 
   db.data.users.push(user);
+  userByUsername.set(user.username, user);
+  userByUserId.set(user.userId, user);
   await db.write();
   return user;
 };
@@ -63,8 +88,13 @@ export const updateUser = async (userId, updater) => {
     return null;
   }
 
+  const oldUsername = user.username;
   updater(user);
   touch(user);
+  if (user.username !== oldUsername) {
+    userByUsername.delete(oldUsername);
+    userByUsername.set(user.username, user);
+  }
   await db.write();
   return user;
 };
@@ -89,26 +119,32 @@ export const logSecurityEvent = async entry => {
   await db.write();
 };
 
+const loginAttemptKey = (username, ipAddress) =>
+  `${username.toLowerCase()}:${ipAddress}`;
+
 export const getLoginAttempt = ({ username, ipAddress }) =>
-  db.data.loginAttempts.find(
-    item => item.username === username.toLowerCase() && item.ipAddress === ipAddress
-  ) || null;
+  loginAttemptMap.get(loginAttemptKey(username, ipAddress)) || null;
 
 export const setLoginAttempt = async entry => {
-  const existing = getLoginAttempt(entry);
+  const key = loginAttemptKey(entry.username, entry.ipAddress);
+  const existing = loginAttemptMap.get(key);
   if (existing) {
     Object.assign(existing, entry, { updatedAt: nowIso() });
   } else {
-    db.data.loginAttempts.push({
+    const record = {
       ...entry,
       username: entry.username.toLowerCase(),
       updatedAt: nowIso()
-    });
+    };
+    db.data.loginAttempts.push(record);
+    loginAttemptMap.set(key, record);
   }
   await db.write();
 };
 
 export const clearLoginAttempt = async ({ username, ipAddress }) => {
+  const key = loginAttemptKey(username, ipAddress);
+  loginAttemptMap.delete(key);
   db.data.loginAttempts = db.data.loginAttempts.filter(
     item => !(item.username === username.toLowerCase() && item.ipAddress === ipAddress)
   );

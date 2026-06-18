@@ -22,7 +22,14 @@ export const config = {
   dataDir,
   uploadDir,
   port: Number(process.env.APP_API_PORT || 18000),
-  jwtSecret: process.env.APP_JWT_SECRET || crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, ''),
+  jwtSecret: (() => {
+    const secret = process.env.APP_JWT_SECRET;
+    if (!secret) {
+      console.error('FATAL: APP_JWT_SECRET is not set. Refusing to start with an auto-generated secret (tokens would invalidate on every restart). Set APP_JWT_SECRET in your .env file.');
+      process.exit(1);
+    }
+    return secret;
+  })(),
   jwtExpiresIn: process.env.APP_JWT_EXPIRES_IN || '12h',
   openimApiUrl: (process.env.OPENIM_API_URL || 'http://127.0.0.1:10002').replace(/\/$/, ''),
   openimSecret: process.env.OPENIM_SECRET || '',

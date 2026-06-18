@@ -51,6 +51,14 @@ const uploadLimiter = rateLimit({
   message: { message: '上传过于频繁，请稍后再试' }
 });
 
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: '请求过于频繁，请稍后再试' }
+});
+
 const getHealthPayload = async () => {
   const openim = await checkOpenImStatus();
   return {
@@ -68,6 +76,7 @@ app.get('/api/health', async (_req, res) => {
   res.json(await getHealthPayload());
 });
 
+app.use(globalLimiter);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', requireAuth, usersRoutes);
 app.use('/api/keys', requireAuth, keysRoutes);
@@ -77,6 +86,21 @@ app.use('/api/admin', requireAuth, requireAdmin, adminRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`API listening on ${config.port}`);
 });
+
+const shutdown = signal => {
+  console.log(`${signal} received, shutting down gracefully…`);
+  server.close(() => {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10_000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

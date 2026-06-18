@@ -17,8 +17,15 @@ const router = express.Router();
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const users = listPublicUsers().filter(user => user.userId !== req.user.userId);
-    res.json({ users });
+    const allUsers = listPublicUsers().filter(user => user.userId !== req.user.userId);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    res.json({
+      users: allUsers.slice(offset, offset + limit),
+      total: allUsers.length,
+      limit,
+      offset
+    });
   })
 );
 

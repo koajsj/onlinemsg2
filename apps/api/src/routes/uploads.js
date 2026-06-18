@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
+import { fileTypeFromBuffer } from 'file-type';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { asyncHandler } from '../middleware/error.js';
@@ -50,6 +51,16 @@ router.post(
     const input = uploadSchema.parse(req.body);
     if (!allowedMimeTypes.has(input.originalMime)) {
       res.status(400).json({ message: '文件类型不允许' });
+      return;
+    }
+
+    const detected = await fileTypeFromBuffer(req.file.buffer);
+    if (detected && !allowedMimeTypes.has(detected.mime)) {
+      res.status(400).json({ message: '文件实际类型不允许' });
+      return;
+    }
+    if (isImageMimeType(input.originalMime) && detected && !isImageMimeType(detected.mime)) {
+      res.status(400).json({ message: '文件实际内容不是图片' });
       return;
     }
 

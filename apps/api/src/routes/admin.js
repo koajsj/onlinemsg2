@@ -7,6 +7,12 @@ import { config } from '../config.js';
 
 const router = express.Router();
 
+const parsePagination = query => {
+  const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(query.offset) || 0, 0);
+  return { limit, offset };
+};
+
 router.get(
   '/summary',
   asyncHandler(async (_req, res) => {
@@ -23,33 +29,48 @@ router.get(
 
 router.get(
   '/users',
-  asyncHandler(async (_req, res) => {
-    const users = listPublicUsers();
-    const statuses = await getOpenImUserStatuses(users.map(user => user.userId));
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = parsePagination(req.query);
+    const allUsers = listPublicUsers();
+    const paged = allUsers.slice(offset, offset + limit);
+    const statuses = await getOpenImUserStatuses(paged.map(user => user.userId));
     const statusMap = new Map(statuses.map(item => [item.userID, item.status]));
     res.json({
-      users: users.map(user => ({
+      users: paged.map(user => ({
         ...user,
         onlineStatus: statusMap.get(user.userId) || 'offline'
-      }))
+      })),
+      total: allUsers.length,
+      limit,
+      offset
     });
   })
 );
 
 router.get(
   '/logins',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = parsePagination(req.query);
+    const total = db.data.loginLogs.length;
     res.json({
-      logs: db.data.loginLogs.slice(0, 100)
+      logs: db.data.loginLogs.slice(offset, offset + limit),
+      total,
+      limit,
+      offset
     });
   })
 );
 
 router.get(
   '/security',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = parsePagination(req.query);
+    const total = db.data.securityEvents.length;
     res.json({
-      events: db.data.securityEvents.slice(0, 100)
+      events: db.data.securityEvents.slice(offset, offset + limit),
+      total,
+      limit,
+      offset
     });
   })
 );

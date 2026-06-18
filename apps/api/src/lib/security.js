@@ -23,11 +23,21 @@ const passwordSchema = z
   .max(64)
   .regex(/^(?=.*[A-Za-z])(?=.*\d).+$/);
 
+const jwkSchema = z.string().min(32).max(12000).refine(val => {
+  if (!val) return true;
+  try {
+    const parsed = JSON.parse(val);
+    return parsed.kty && typeof parsed.kty === 'string';
+  } catch {
+    return false;
+  }
+}, { message: '公钥格式无效，需要 JWK 格式' });
+
 export const registerSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   nickname: z.string().min(1).max(32),
-  publicKey: z.string().min(32).max(12000)
+  publicKey: jwkSchema
 });
 
 export const loginSchema = z.object({
@@ -50,7 +60,7 @@ export const profileSchema = z.object({
   nickname: z.string().min(1).max(32).optional(),
   bio: z.string().max(160).optional(),
   avatarUrl: z.string().max(500).optional(),
-  publicKey: z.string().min(32).max(12000).optional(),
+  publicKey: jwkSchema.optional(),
   preferences: z
     .object({
       theme: z.enum(['light', 'dark', 'system']).optional(),
