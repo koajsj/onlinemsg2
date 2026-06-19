@@ -51,6 +51,13 @@ export const findUserByUsername = username =>
 export const findUserById = userId =>
   userByUserId.get(userId) || null;
 
+export const findUserByIdentity = identity => {
+  const normalized = String(identity || '').toLowerCase();
+  return db.data.users.find(
+    user => user.username === normalized || user.userId === normalized
+  ) || null;
+};
+
 export const listPublicUsers = () => db.data.users.map(authUser);
 
 export const addUser = async input => {
@@ -97,6 +104,23 @@ export const updateUser = async (userId, updater) => {
   }
   await db.write();
   return user;
+};
+
+export const removeUser = async userId => {
+  const user = findUserById(userId);
+  if (!user) {
+    return false;
+  }
+
+  userByUsername.delete(user.username);
+  userByUserId.delete(user.userId);
+  db.data.users = db.data.users.filter(item => item.userId !== userId);
+  db.data.conversationKeys = db.data.conversationKeys.filter(
+    item => !item.participantIds?.includes(userId)
+  );
+  db.data.uploads = db.data.uploads.filter(item => item.ownerId !== userId);
+  await db.write();
+  return true;
 };
 
 export const logLoginAttempt = async entry => {

@@ -1,7 +1,7 @@
 import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
-import { findUserByUsername, updateUser } from '../lib/store.js';
+import { findUserByIdentity, findUserByUsername, updateUser } from '../lib/store.js';
 import { ensureOpenImUser, getOpenImUserToken } from '../lib/openim.js';
 import {
   buildAuthPayload,
@@ -13,7 +13,7 @@ import {
   verifyPassword
 } from '../lib/security.js';
 import { cleanText } from '../lib/utils.js';
-import { addUser } from '../lib/store.js';
+import { addUser, removeUser } from '../lib/store.js';
 
 const router = express.Router();
 
@@ -23,7 +23,7 @@ router.post(
     const input = registerSchema.parse(req.body);
     const username = input.username.toLowerCase();
     const nickname = cleanText(input.nickname, 32) || username;
-    if (findUserByUsername(username)) {
+    if (findUserByIdentity(username)) {
       throw new Error('账号已存在');
     }
 
@@ -36,19 +36,28 @@ router.post(
       role: 'user'
     });
 
-    await ensureOpenImUser({
-      userId: user.userId,
-      nickname: user.nickname,
-      avatarUrl: user.avatarUrl
-    });
+    try {
+      await ensureOpenImUser({
+        userId: user.userId,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl
+      });
 
-    const openimToken = await getOpenImUserToken(user.userId);
-    await registerSuccessfulLogin(req, user);
-    await updateUser(user.userId, current => {
-      current.lastLoginAt = new Date().toISOString();
-    });
+      const openimToken = await getOpenImUserToken(user.userId);
+      await registerSuccessfulLogin(req, user);
+      await updateUser(user.userId, current => {
+        current.lastLoginAt = new Date().toISOString();
+      });
 
-    res.json(buildAuthPayload({ user, openimToken }));
+      res.json(buildAuthPayload({ user, openimToken }));
+    } catch (error) {
+      try {
+        await removeUser(user.userId);
+      } catch (_rollbackError) {
+        // Keep the original registration error visible to the caller.
+      }
+      throw error;
+    }
   })
 );
 

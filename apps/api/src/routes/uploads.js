@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
-import { fileTypeFromBuffer } from 'file-type';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { asyncHandler } from '../middleware/error.js';
@@ -37,8 +36,22 @@ const allowedMimeTypes = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ]);
+const allowedEncryptedMimeTypes = new Set([
+  '',
+  'application/octet-stream',
+  'binary/octet-stream',
+  'application/x-binary'
+]);
 
 const isImageMimeType = mimeType => mimeType.startsWith('image/');
+const sanitizeOriginalName = value => {
+  const cleaned = cleanText(value, 200)
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+/, '')
+    .trim();
+  return cleaned || 'attachment';
+};
 
 router.post(
   '/',
@@ -54,13 +67,8 @@ router.post(
       return;
     }
 
-    const detected = await fileTypeFromBuffer(req.file.buffer);
-    if (detected && !allowedMimeTypes.has(detected.mime)) {
-      res.status(400).json({ message: '文件实际类型不允许' });
-      return;
-    }
-    if (isImageMimeType(input.originalMime) && detected && !isImageMimeType(detected.mime)) {
-      res.status(400).json({ message: '文件实际内容不是图片' });
+    if (!allowedEncryptedMimeTypes.has(req.file.mimetype || '')) {
+      res.status(400).json({ message: '加密附件上传格式错误' });
       return;
     }
 
@@ -88,7 +96,7 @@ router.post(
     const uploadId = crypto.randomUUID();
     const storedName = `${uploadId}.bin`;
     const filePath = path.join(config.uploadDir, storedName);
-    const originalName = cleanText(input.originalName, 200);
+    const originalName = sanitizeOriginalName(input.originalName);
     await fs.writeFile(filePath, req.file.buffer);
 
     await addUpload({

@@ -1,6 +1,6 @@
 import express from 'express';
 import { asyncHandler } from '../middleware/error.js';
-import { clearLoginAttempt, findUserByUsername, logSecurityEvent, updateUser, listPublicUsers } from '../lib/store.js';
+import { clearLoginAttempt, findUserByIdentity, logSecurityEvent, updateUser, listPublicUsers } from '../lib/store.js';
 import {
   buildAuthPayload,
   credentialsSchema,
@@ -77,7 +77,7 @@ router.patch(
     }
 
     if (usernameChanged) {
-      const existingUser = findUserByUsername(nextUsername);
+      const existingUser = findUserByIdentity(nextUsername);
       if (existingUser && existingUser.userId !== req.user.userId) {
         throw new Error('新账号已存在');
       }

@@ -1,7 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import AdminWorkspace from './AdminWorkspace.vue';
+import ContactSidebar from './ContactSidebar.vue';
+import ConversationPanel from './ConversationPanel.vue';
+import ProfileSettingsPanel from './ProfileSettingsPanel.vue';
 import { apiRequest } from '../lib/api.js';
 import {
+  clearConversationKeyCache,
   clearUnlockedPrivateKey,
   decryptFileUrl,
   decryptPayload,
@@ -17,6 +22,7 @@ import {
   unlockPrivateKey
 } from '../lib/e2ee.js';
 import { CbEvents, MessageType, OnlineState, SessionType, openimConfig, sdk } from '../lib/sdk.js';
+import { formatConversationTime, getMessagePreview, getOnlineLabel } from '../lib/ui.js';
 
 const props = defineProps({
   session: {
@@ -30,7 +36,6 @@ const emit = defineEmits(['logout', 'session-updated']);
 const loading = ref(true);
 const loadingMessages = ref(false);
 const sending = ref(false);
-const error = ref('');
 const connectionStatus = ref('连接中');
 const mobileSection = ref('contacts');
 const activeUserId = ref('');
@@ -47,6 +52,10 @@ const conversations = ref([]);
 const messagesByUser = reactive({});
 const onlineMap = reactive({});
 const attachmentUrls = reactive({});
+
+const chatFeedback = reactive({ tone: '', text: '' });
+const settingsFeedback = reactive({ tone: '', text: '' });
+const adminFeedback = reactive({ tone: '', text: '' });
 
 const profileForm = reactive({
   nickname: props.session.user.nickname || '',
@@ -72,29 +81,24 @@ const adminData = reactive({
   system: null
 });
 
-const sessionLocked = computed(() => !isPrivateKeyUnlocked(props.session.user.username));
+const eventBindings = [];
+
 const currentUser = computed(() => props.session.user);
+const hasLocalPrivateKey = computed(() => hasPrivateKeyPackage(currentUser.value.username));
+const sessionLocked = computed(() => !isPrivateKeyUnlocked(currentUser.value.username));
 const activeContact = computed(() => contacts.value.find(item => item.userId === activeUserId.value) || null);
+const activeConversation = computed(
+  () => conversations.value.find(item => item.userID === activeUserId.value && item.conversationType === SessionType.Single) || null
+);
 const activeMessages = computed(() => {
   const list = messagesByUser[activeUserId.value] || [];
   return [...list].sort((left, right) => left.sendTime - right.sendTime);
 });
-const unreadMap = computed(() =>
-  Object.fromEntries(
-    conversations.value
-      .filter(item => item.conversationType === SessionType.Single)
-      .map(item => [item.userID, Number(item.unreadCount || 0)])
-  )
-);
-
-const activeConversation = computed(
-  () => conversations.value.find(item => item.userID === activeUserId.value && item.conversationType === SessionType.Single) || null
-);
-
 const secureParticipants = computed(() => {
   if (!activeContact.value) {
     return [];
   }
+
   return [
     {
       userId: currentUser.value.userId,
@@ -108,8 +112,67 @@ const secureParticipants = computed(() => {
     }
   ];
 });
+const encryptionNotice = computed(() => {
+  if (!activeContact.value) {
+    return '';
+  }
 
-const eventBindings = [];
+  if (sessionLocked.value && hasLocalPrivateKey.value) {
+    return '当前设备私钥未解锁，只能看到会话元数据，无法读取加密正文和附件。';
+  }
+
+  if (sessionLocked.value) {
+    return '当前设备没有本地私钥。生成并绑定后，新消息可以继续加密，但旧消息无法自动恢复。';
+  }
+
+  return '当前会话正文、图片和文件都由浏览器端解密。';
+});
+
+const conversationMap = computed(() => {
+  const map = new Map();
+  for (const item of conversations.value) {
+    if (item.conversationType === SessionType.Single) {
+      map.set(item.userID, item);
+    }
+  }
+  return map;
+});
+
+const contactCards = computed(() =>
+  contacts.value
+    .map(contact => {
+      const conversation = conversationMap.value.get(contact.userId);
+      const list = messagesByUser[contact.userId] || [];
+      const lastMessage = list.length ? list[list.length - 1] : null;
+      const sortTime = Number(lastMessage?.sendTime || conversation?.latestMsgSendTime || conversation?.latestMsgRecvTime || 0);
+      const unreadCount = Number(conversation?.unreadCount || 0);
+
+      return {
+        ...contact,
+        isOnline: onlineMap[contact.userId] === OnlineState.Online,
+        onlineLabel: getOnlineLabel(onlineMap[contact.userId], OnlineState.Online),
+        unreadCount,
+        preview: lastMessage
+          ? getMessagePreview(lastMessage)
+          : unreadCount
+            ? `${unreadCount} 条未读消息`
+            : conversation
+              ? '打开继续聊天'
+              : '开始新的加密聊天',
+        timeLabel: formatConversationTime(sortTime),
+        sortTime
+      };
+    })
+    .sort((left, right) => {
+      if (left.sortTime !== right.sortTime) {
+        return right.sortTime - left.sortTime;
+      }
+      if (left.isOnline !== right.isOnline) {
+        return left.isOnline ? -1 : 1;
+      }
+      return left.nickname.localeCompare(right.nickname, 'zh-CN');
+    })
+);
 
 const isStrongLocalPassword = password =>
   typeof password === 'string' &&
@@ -132,6 +195,21 @@ const mimeByExtension = {
 const allowedUploadMimeTypes = new Set(Object.values(mimeByExtension));
 
 const toErrorMessage = (input, fallback) => input?.message || fallback;
+const setChatFeedback = (tone, text) => {
+  chatFeedback.tone = tone;
+  chatFeedback.text = text;
+};
+const setSettingsFeedback = (tone, text) => {
+  settingsFeedback.tone = tone;
+  settingsFeedback.text = text;
+};
+const setAdminFeedback = (tone, text) => {
+  adminFeedback.tone = tone;
+  adminFeedback.text = text;
+};
+const clearChatFeedback = () => setChatFeedback('', '');
+const clearSettingsFeedback = () => setSettingsFeedback('', '');
+const clearAdminFeedback = () => setAdminFeedback('', '');
 
 const revokeAttachmentUrl = messageId => {
   if (!attachmentUrls[messageId]) {
@@ -175,14 +253,6 @@ const displayName = userId => {
   return contacts.value.find(item => item.userId === userId)?.nickname || userId;
 };
 
-const formatTime = stamp => {
-  if (!stamp) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(stamp));
-};
-
 const parseEnvelope = async raw => {
   try {
     if (raw.contentType === MessageType.CustomMessage && raw.customElem?.extension === '257823-e2ee') {
@@ -213,7 +283,7 @@ const parseEnvelope = async raw => {
       if (!key) {
         return {
           kind: 'locked',
-          body: '未解锁，无法解密当前消息'
+          body: '当前设备未解锁，暂时无法解密这条消息。'
         };
       }
 
@@ -229,7 +299,7 @@ const parseEnvelope = async raw => {
   } catch (_error) {
     return {
       kind: 'locked',
-      body: '消息解密失败'
+      body: '消息解密失败，请重新解锁当前设备密钥后再试。'
     };
   }
 
@@ -270,21 +340,19 @@ const ensureAttachment = async uiMessage => {
     throw new Error('当前设备还没有解锁会话密钥，无法读取附件');
   }
 
-  let objectUrl = '';
   try {
-    objectUrl = await decryptFileUrl({
+    const objectUrl = await decryptFileUrl({
       uploadId: uiMessage.uploadId,
       iv: uiMessage.fileIv,
       key,
       token: props.session.token,
       mimeType: uiMessage.mimeType
     });
+    revokeAttachmentUrl(uiMessage.id);
+    attachmentUrls[uiMessage.id] = objectUrl;
   } catch (_error) {
     throw new Error('附件解密失败，请确认当前设备私钥已解锁');
   }
-
-  revokeAttachmentUrl(uiMessage.id);
-  attachmentUrls[uiMessage.id] = objectUrl;
 };
 
 const normalizeMessage = async raw => {
@@ -330,7 +398,10 @@ const normalizeMessage = async raw => {
 const mergeMessages = async rawMessages => {
   for (const raw of rawMessages) {
     const ui = await normalizeMessage(raw);
-    if (!ui) continue;
+    if (!ui) {
+      continue;
+    }
+
     if (!messagesByUser[ui.peerId]) {
       messagesByUser[ui.peerId] = [];
     }
@@ -392,14 +463,14 @@ const loadConversationMessages = async userId => {
 };
 
 const selectUser = async userId => {
-  error.value = '';
+  clearChatFeedback();
   try {
     activeUserId.value = userId;
     mobileSection.value = 'chat';
     await refreshConversations();
     await loadConversationMessages(userId);
   } catch (selectError) {
-    error.value = selectError.message;
+    setChatFeedback('error', toErrorMessage(selectError, '会话切换失败'));
   }
 };
 
@@ -433,10 +504,12 @@ const sendEnvelope = async payload => {
 
 const sendText = async () => {
   const content = composer.value.trim();
-  if (!content) return;
+  if (!content) {
+    return;
+  }
 
   sending.value = true;
-  error.value = '';
+  clearChatFeedback();
   try {
     await sendEnvelope({
       kind: 'text',
@@ -448,7 +521,7 @@ const sendText = async () => {
     await refreshConversations();
     await loadConversationMessages(activeContact.value.userId);
   } catch (sendError) {
-    error.value = sendError.message;
+    setChatFeedback('error', toErrorMessage(sendError, '消息发送失败'));
   } finally {
     sending.value = false;
   }
@@ -457,10 +530,12 @@ const sendText = async () => {
 const sendFile = async event => {
   const file = event.target.files?.[0];
   event.target.value = '';
-  if (!file || !activeContact.value) return;
+  if (!file || !activeContact.value) {
+    return;
+  }
 
   sending.value = true;
-  error.value = '';
+  clearChatFeedback();
   try {
     const originalMime = resolveUploadMime(file);
     if (!allowedUploadMimeTypes.has(originalMime)) {
@@ -479,7 +554,11 @@ const sendFile = async event => {
     formData.append('peerUserId', activeContact.value.userId);
     formData.append('originalName', file.name);
     formData.append('originalMime', originalMime);
-    formData.append('file', new File([encryptedFile.bytes], `${file.name}.bin`, { type: 'application/octet-stream' }));
+    formData.append(
+      'file',
+      new File([encryptedFile.bytes], `${file.name}.bin`, { type: 'application/octet-stream' })
+    );
+
     const uploadResp = await apiRequest('/uploads', {
       method: 'POST',
       token: props.session.token,
@@ -499,7 +578,7 @@ const sendFile = async event => {
     await refreshConversations();
     await loadConversationMessages(activeContact.value.userId);
   } catch (sendError) {
-    error.value = sendError.message;
+    setChatFeedback('error', toErrorMessage(sendError, '附件发送失败'));
   } finally {
     sending.value = false;
   }
@@ -510,20 +589,21 @@ const revoke = async message => {
     return;
   }
 
-  error.value = '';
+  clearChatFeedback();
   try {
     await sdk.revokeMessage({
       conversationID: message.conversationId,
       clientMsgID: message.id
     });
     await loadConversationMessages(activeUserId.value);
+    setChatFeedback('success', '消息已撤回');
   } catch (revokeError) {
-    error.value = revokeError.message;
+    setChatFeedback('error', toErrorMessage(revokeError, '消息撤回失败'));
   }
 };
 
 const saveProfile = async () => {
-  error.value = '';
+  clearSettingsFeedback();
   try {
     const response = await apiRequest('/users/me', {
       method: 'PATCH',
@@ -553,8 +633,9 @@ const saveProfile = async () => {
       darkMode: Boolean(response.user.preferences?.darkMode ?? false)
     });
     applyTheme();
+    setSettingsFeedback('success', '资料已保存');
   } catch (saveError) {
-    error.value = saveError.message;
+    setSettingsFeedback('error', toErrorMessage(saveError, '资料保存失败'));
   }
 };
 
@@ -564,12 +645,12 @@ const updateCredentials = async () => {
   const nextPassword = credentialsForm.newPassword;
 
   if (nextPassword && nextPassword !== credentialsForm.confirmPassword) {
-    error.value = '两次输入的新密码不一致';
+    setSettingsFeedback('error', '两次输入的新密码不一致');
     return;
   }
 
   credentialsLoading.value = true;
-  error.value = '';
+  clearSettingsFeedback();
   try {
     const payload = await apiRequest('/users/me/credentials', {
       method: 'PATCH',
@@ -590,7 +671,7 @@ const updateCredentials = async () => {
         await rewrapPrivateKeyPackage(nextUsername, credentialsForm.currentPassword, nextPassword);
       }
     } catch (_migrationError) {
-      error.value = '账号密码已更新，但当前设备的本地加密私钥没有自动同步，请重新解锁或重新绑定。';
+      setSettingsFeedback('warning', '账号密码已更新，但当前设备的本地私钥没有自动同步，请重新解锁或重新绑定。');
     }
 
     emit('session-updated', payload);
@@ -600,8 +681,12 @@ const updateCredentials = async () => {
       newPassword: '',
       confirmPassword: ''
     });
+
+    if (!settingsFeedback.text) {
+      setSettingsFeedback('success', '账号信息已更新');
+    }
   } catch (credentialError) {
-    error.value = credentialError.message;
+    setSettingsFeedback('error', toErrorMessage(credentialError, '账号信息更新失败'));
   } finally {
     credentialsLoading.value = false;
   }
@@ -609,29 +694,30 @@ const updateCredentials = async () => {
 
 const unlockEncryption = async () => {
   if (!unlockPassword.value.trim()) {
-    error.value = '请输入当前密码后再解锁';
+    setSettingsFeedback('error', '请输入当前密码后再解锁');
     return;
   }
 
-  error.value = '';
+  clearSettingsFeedback();
   try {
     await unlockPrivateKey(currentUser.value.username, unlockPassword.value);
     unlockPassword.value = '';
     if (activeUserId.value) {
       await loadConversationMessages(activeUserId.value);
     }
+    setSettingsFeedback('success', '当前设备私钥已解锁');
   } catch (_error) {
-    error.value = '密码不正确，无法解锁本地私钥';
+    setSettingsFeedback('error', '密码不正确，无法解锁本地私钥');
   }
 };
 
 const setupEncryption = async () => {
   if (!isStrongLocalPassword(setupPassword.value)) {
-    error.value = '本机密钥密码至少 8 位，且必须包含字母和数字';
+    setSettingsFeedback('error', '本机密钥密码至少 8 位，且必须包含字母和数字');
     return;
   }
 
-  error.value = '';
+  clearSettingsFeedback();
   try {
     const publicKey = await generateAndStoreUserKeys(currentUser.value.username, setupPassword.value);
     const response = await apiRequest('/users/me', {
@@ -646,13 +732,14 @@ const setupEncryption = async () => {
       user: response.user
     });
     setupPassword.value = '';
+    setSettingsFeedback('success', '本机密钥已生成并绑定');
   } catch (setupError) {
-    error.value = setupError.message;
+    setSettingsFeedback('error', toErrorMessage(setupError, '本机密钥初始化失败'));
   }
 };
 
 const openFile = async message => {
-  error.value = '';
+  clearChatFeedback();
   try {
     if (!attachmentUrls[message.id]) {
       await ensureAttachment(message);
@@ -666,25 +753,28 @@ const openFile = async message => {
     window.open(attachmentUrls[message.id], '_blank', 'noopener,noreferrer');
   } catch (openError) {
     message.attachmentError = toErrorMessage(openError, '附件打开失败');
-    error.value = message.attachmentError;
+    setChatFeedback('error', message.attachmentError);
   }
 };
 
 const loadAttachment = async message => {
-  error.value = '';
+  clearChatFeedback();
   try {
     await ensureAttachment(message);
     message.attachmentError = '';
   } catch (attachmentError) {
     message.attachmentError = toErrorMessage(attachmentError, '附件加载失败');
-    error.value = message.attachmentError;
+    setChatFeedback('error', message.attachmentError);
   }
 };
 
 const loadAdmin = async () => {
-  if (!currentUser.value.isAdmin) return;
+  if (!currentUser.value.isAdmin) {
+    return;
+  }
 
   adminLoading.value = true;
+  clearAdminFeedback();
   try {
     const [summary, users, logins, security, system] = await Promise.all([
       apiRequest('/admin/summary', { token: props.session.token }),
@@ -699,10 +789,19 @@ const loadAdmin = async () => {
     adminData.security = security.events;
     adminData.system = system.system;
   } catch (adminError) {
-    error.value = adminError.message;
+    setAdminFeedback('error', toErrorMessage(adminError, '后台数据加载失败'));
   } finally {
     adminLoading.value = false;
   }
+};
+
+const openAdmin = async () => {
+  adminOpen.value = true;
+  await loadAdmin();
+};
+
+const closeAdmin = () => {
+  adminOpen.value = false;
 };
 
 const logout = async () => {
@@ -714,6 +813,8 @@ const logout = async () => {
   } catch (_error) {
     // ignore
   }
+
+  clearConversationKeyCache();
   clearUnlockedPrivateKey(currentUser.value.username);
   try {
     await sdk.logout();
@@ -725,6 +826,8 @@ const logout = async () => {
 
 onMounted(async () => {
   applyTheme();
+  clearConversationKeyCache();
+
   registerEvent(CbEvents.OnConnectSuccess, () => {
     connectionStatus.value = '已连接';
   });
@@ -756,7 +859,7 @@ onMounted(async () => {
       }
       await refreshConversations();
     } catch (eventError) {
-      error.value = toErrorMessage(eventError, '新消息处理失败');
+      setChatFeedback('error', toErrorMessage(eventError, '新消息处理失败'));
     }
   });
   registerEvent(CbEvents.OnNewRecvMessageRevoked, async () => {
@@ -765,7 +868,7 @@ onMounted(async () => {
         await loadConversationMessages(activeUserId.value);
       }
     } catch (eventError) {
-      error.value = toErrorMessage(eventError, '撤回消息同步失败');
+      setChatFeedback('error', toErrorMessage(eventError, '撤回消息同步失败'));
     }
   });
 
@@ -783,7 +886,7 @@ onMounted(async () => {
       await loadConversationMessages(activeUserId.value);
     }
   } catch (mountError) {
-    error.value = mountError.message;
+    setChatFeedback('error', toErrorMessage(mountError, '聊天服务连接失败'));
   } finally {
     loading.value = false;
   }
@@ -809,187 +912,59 @@ watch(
   <div class="app-shell">
     <div class="app-frame">
       <aside class="left-pane" :class="{ mobileHidden: mobileSection !== 'contacts' }">
-        <div class="pane-head">
-          <div>
-            <p class="pane-label">联系人</p>
-            <h2>{{ currentUser.nickname }}</h2>
-          </div>
-          <span class="status-dot" :class="{ online: connectionStatus === '已连接' }">{{ connectionStatus }}</span>
-        </div>
-
-        <div class="contact-list">
-          <button
-            v-for="contact in contacts"
-            :key="contact.userId"
-            class="contact-item"
-            :class="{ active: contact.userId === activeUserId }"
-            type="button"
-            @click="selectUser(contact.userId)"
-          >
-            <div class="avatar-circle">{{ contact.nickname.slice(0, 1) }}</div>
-            <div class="contact-meta">
-              <strong>{{ contact.nickname }}</strong>
-              <div class="contact-subline">
-                <span>{{ onlineMap[contact.userId] === OnlineState.Online ? '在线' : '离线' }}</span>
-                <span v-if="unreadMap[contact.userId]" class="unread-badge">{{ unreadMap[contact.userId] }}</span>
-              </div>
-            </div>
-          </button>
-        </div>
+        <ContactSidebar
+          :current-user="currentUser"
+          :connection-status="connectionStatus"
+          :contact-cards="contactCards"
+          :active-user-id="activeUserId"
+          @select-contact="selectUser"
+        />
       </aside>
 
       <main class="chat-pane" :class="{ mobileHidden: mobileSection !== 'chat' }">
-        <div class="pane-head">
-          <button class="mobile-back" type="button" @click="mobileSection = 'contacts'">返回</button>
-          <div>
-            <p class="pane-label">会话</p>
-            <h2>{{ activeContact?.nickname || '选择联系人' }}</h2>
-          </div>
-          <div class="pane-actions">
-            <label class="upload-button">
-              发送文件
-              <input accept="image/*,.pdf,.txt,.zip,.docx,.xlsx" type="file" @change="sendFile">
-            </label>
-          </div>
-        </div>
-
-        <div v-if="loading" class="empty-state">正在连接 OpenIM...</div>
-        <div v-else-if="!activeContact" class="empty-state">先从左侧选择一个联系人。</div>
-        <div v-else class="message-area">
-          <div class="message-list">
-            <div v-if="loadingMessages" class="empty-state subtle">正在读取消息...</div>
-            <div v-for="message in activeMessages" :key="message.id" class="message-row" :class="{ self: message.fromSelf }">
-              <div class="message-bubble" :class="message.kind">
-                <template v-if="message.kind === 'image'">
-                  <img v-if="attachmentUrls[message.id]" :src="attachmentUrls[message.id]" alt="图片消息" class="message-image">
-                  <template v-else>
-                    <button class="inline-link" type="button" @click="loadAttachment(message)">加载图片</button>
-                    <span v-if="message.attachmentError" class="attachment-error">{{ message.attachmentError }}</span>
-                  </template>
-                </template>
-                <template v-else-if="message.kind === 'file'">
-                  <button class="file-chip" type="button" @click="openFile(message)">
-                    <strong>{{ message.fileName }}</strong>
-                    <span>{{ Math.ceil(message.size / 1024) }} KB</span>
-                  </button>
-                  <span v-if="message.attachmentError" class="attachment-error">{{ message.attachmentError }}</span>
-                </template>
-                <template v-else>
-                  {{ message.body }}
-                </template>
-
-                <div class="message-foot">
-                  <span>{{ formatTime(message.sendTime) }}</span>
-                  <button v-if="message.fromSelf" class="ghost-link" type="button" @click="revoke(message)">撤回</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="error" class="form-error in-chat">{{ error }}</div>
-
-          <div class="composer">
-            <div class="emoji-row" v-if="showEmoji">
-              <button type="button" @click="composer += '🙂'">🙂</button>
-              <button type="button" @click="composer += '👍'">👍</button>
-              <button type="button" @click="composer += '🎉'">🎉</button>
-              <button type="button" @click="composer += '❤️'">❤️</button>
-            </div>
-            <div class="composer-bar">
-              <button class="ghost-icon" type="button" @click="showEmoji = !showEmoji">😊</button>
-              <textarea v-model="composer" placeholder="输入加密消息..." rows="1" @keydown.enter.prevent="sendText" />
-              <button class="primary-button small" :disabled="sending" type="button" @click="sendText">发送</button>
-            </div>
-          </div>
-        </div>
+        <ConversationPanel
+          :loading="loading"
+          :loading-messages="loadingMessages"
+          :sending="sending"
+          :active-contact="activeContact"
+          :displayed-messages="activeMessages"
+          :attachment-urls="attachmentUrls"
+          :composer="composer"
+          :show-emoji="showEmoji"
+          :feedback="chatFeedback"
+          :encryption-notice="encryptionNotice"
+          @back="mobileSection = 'contacts'"
+          @send-file="sendFile"
+          @update:composer="composer = $event"
+          @toggle-emoji="showEmoji = !showEmoji"
+          @send-text="sendText"
+          @load-attachment="loadAttachment"
+          @open-file="openFile"
+          @revoke="revoke"
+        />
       </main>
 
       <aside class="right-pane" :class="{ mobileHidden: mobileSection !== 'settings' }">
-        <div class="pane-head">
-          <button class="mobile-back" type="button" @click="mobileSection = 'chat'">返回</button>
-          <div>
-            <p class="pane-label">资料与设置</p>
-            <h2>账号</h2>
-          </div>
-        </div>
-
-        <div class="settings-card">
-          <label>
-            <span>昵称</span>
-            <input v-model.trim="profileForm.nickname" maxlength="32">
-          </label>
-          <label>
-            <span>头像 URL</span>
-            <input v-model.trim="profileForm.avatarUrl" maxlength="500">
-          </label>
-          <label>
-            <span>个人说明</span>
-            <textarea v-model.trim="profileForm.bio" maxlength="160" rows="3" />
-          </label>
-          <label>
-            <span>界面主题</span>
-            <select v-model="profileForm.theme">
-              <option value="system">跟随系统</option>
-              <option value="light">浅色</option>
-              <option value="dark">深色</option>
-            </select>
-          </label>
-          <label class="switch-row">
-            <span>通知开关</span>
-            <input v-model="profileForm.notifications" type="checkbox">
-          </label>
-          <label class="switch-row">
-            <span>深色偏好</span>
-            <input v-model="profileForm.darkMode" type="checkbox">
-          </label>
-          <button class="primary-button" type="button" @click="saveProfile">保存设置</button>
-        </div>
-
-        <div class="settings-card">
-          <h3>{{ currentUser.isAdmin ? '管理员登录信息' : '登录信息' }}</h3>
-          <label>
-            <span>当前账号</span>
-            <input :value="currentUser.username" disabled>
-          </label>
-          <label>
-            <span>当前密码</span>
-            <input v-model="credentialsForm.currentPassword" autocomplete="current-password" type="password">
-          </label>
-          <label>
-            <span>新账号</span>
-            <input v-model.trim="credentialsForm.newUsername" maxlength="24" placeholder="留空表示不修改账号">
-          </label>
-          <label>
-            <span>新密码</span>
-            <input v-model="credentialsForm.newPassword" autocomplete="new-password" type="password" placeholder="留空表示不修改密码">
-          </label>
-          <label>
-            <span>确认新密码</span>
-            <input v-model="credentialsForm.confirmPassword" autocomplete="new-password" type="password">
-          </label>
-          <button class="primary-button" :disabled="credentialsLoading" type="button" @click="updateCredentials">
-            {{ credentialsLoading ? '保存中...' : '更新账号密码' }}
-          </button>
-        </div>
-
-        <div v-if="sessionLocked" class="settings-card warning-card">
-          <template v-if="hasPrivateKeyPackage(currentUser.username)">
-            <h3>解锁加密私钥</h3>
-            <input v-model="unlockPassword" placeholder="重新输入登录密码" type="password">
-            <button class="primary-button" type="button" @click="unlockEncryption">解锁消息</button>
-          </template>
-          <template v-else>
-            <h3>初始化本机密钥</h3>
-            <p>当前设备没有私钥，旧消息无法自动恢复。生成新密钥后，新消息会继续加密。</p>
-            <input v-model="setupPassword" placeholder="设置当前设备密钥密码" type="password">
-            <button class="primary-button" type="button" @click="setupEncryption">生成并绑定</button>
-          </template>
-        </div>
-
-        <div class="settings-card compact">
-          <button v-if="currentUser.isAdmin" class="ghost-button" type="button" @click="adminOpen = true; loadAdmin()">管理员后台</button>
-          <button class="ghost-button danger" type="button" @click="logout">退出登录</button>
-        </div>
+        <ProfileSettingsPanel
+          :current-user="currentUser"
+          :profile-form="profileForm"
+          :credentials-form="credentialsForm"
+          :feedback="settingsFeedback"
+          :session-locked="sessionLocked"
+          :has-local-private-key="hasLocalPrivateKey"
+          :unlock-password="unlockPassword"
+          :setup-password="setupPassword"
+          :credentials-loading="credentialsLoading"
+          @back="mobileSection = 'chat'"
+          @save-profile="saveProfile"
+          @update-credentials="updateCredentials"
+          @update:unlockPassword="unlockPassword = $event"
+          @update:setupPassword="setupPassword = $event"
+          @unlock-encryption="unlockEncryption"
+          @setup-encryption="setupEncryption"
+          @open-admin="openAdmin"
+          @logout="logout"
+        />
       </aside>
     </div>
 
@@ -999,85 +974,18 @@ watch(
       <button :class="{ active: mobileSection === 'settings' }" type="button" @click="mobileSection = 'settings'">设置</button>
     </div>
 
-    <div v-if="adminOpen" class="admin-overlay">
-      <div class="admin-panel">
-        <div class="pane-head">
-          <div>
-            <p class="pane-label">后台</p>
-            <h2>管理员控制台</h2>
-          </div>
-          <button class="ghost-button" type="button" @click="adminOpen = false">关闭</button>
-        </div>
-
-        <div v-if="adminLoading" class="empty-state">后台数据加载中...</div>
-        <template v-else>
-          <div class="admin-grid">
-            <div class="metric-card">
-              <span>用户总数</span>
-              <strong>{{ adminData.summary?.stats.totalUsers || 0 }}</strong>
-            </div>
-            <div class="metric-card">
-              <span>近期成功登录</span>
-              <strong>{{ adminData.summary?.stats.recentLoginCount || 0 }}</strong>
-            </div>
-            <div class="metric-card">
-              <span>安全事件</span>
-              <strong>{{ adminData.summary?.stats.securityEventCount || 0 }}</strong>
-            </div>
-            <div class="metric-card">
-              <span>服务状态</span>
-              <strong>{{ adminData.summary?.openim?.ok ? '正常' : '异常' }}</strong>
-            </div>
-          </div>
-
-          <div class="admin-section">
-            <h3>用户列表</h3>
-            <div class="admin-table">
-              <div v-for="item in adminData.users" :key="item.userId" class="table-row">
-                <span>{{ item.username }}</span>
-                <span>{{ item.nickname }}</span>
-                <span>{{ item.onlineStatus === OnlineState.Online ? '在线' : '离线' }}</span>
-                <span>{{ item.role === 'admin' ? '管理员' : '用户' }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="admin-section">
-            <h3>登录日志</h3>
-            <div class="admin-table">
-              <div v-for="item in adminData.logins" :key="item.id" class="table-row">
-                <span>{{ item.username }}</span>
-                <span>{{ item.status }}</span>
-                <span>{{ item.ipAddress }}</span>
-                <span>{{ item.browser }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="admin-section">
-            <h3>异常登录提示</h3>
-            <div class="admin-table">
-              <div v-for="item in adminData.security" :key="item.id" class="table-row">
-                <span>{{ item.eventType }}</span>
-                <span>{{ item.ipAddress }}</span>
-                <span>{{ item.browser }}</span>
-                <span>{{ item.details }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="admin-section">
-            <h3>基础运维信息</h3>
-            <div class="system-list">
-              <p>系统版本：{{ adminData.system?.platform }}</p>
-              <p>Node：{{ adminData.system?.nodeVersion }}</p>
-              <p>主机：{{ adminData.system?.hostname }}</p>
-              <p>内存：{{ adminData.system?.freeMemoryMb }} / {{ adminData.system?.totalMemoryMb }} MB</p>
-              <p>CPU：{{ adminData.system?.cpuModel }}</p>
-            </div>
-          </div>
-        </template>
-      </div>
-    </div>
+    <AdminWorkspace
+      :open="adminOpen"
+      :loading="adminLoading"
+      :feedback="adminFeedback"
+      :summary="adminData.summary"
+      :users="adminData.users"
+      :logins="adminData.logins"
+      :security="adminData.security"
+      :system="adminData.system"
+      :online-state-value="OnlineState.Online"
+      @close="closeAdmin"
+      @refresh="loadAdmin"
+    />
   </div>
 </template>

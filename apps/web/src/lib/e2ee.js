@@ -159,6 +159,10 @@ export const clearUnlockedPrivateKey = username => {
   privateKeys.delete(username.toLowerCase());
 };
 
+export const clearConversationKeyCache = () => {
+  conversationKeys.clear();
+};
+
 export const renamePrivateKeyPackage = (currentUsername, nextUsername) => {
   const currentKey = privateKeyStorageKey(currentUsername);
   const nextKey = privateKeyStorageKey(nextUsername);
