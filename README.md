@@ -48,7 +48,6 @@ update.sh
 | OpenIM REST API | `10002` |
 | MinIO | `10005` |
 | MinIO Console | `10004` |
-| Grafana | `13000` |
 
 默认访问地址：
 
@@ -56,6 +55,8 @@ update.sh
 http://服务器IP:8080
 http://257823.xyz:8080
 ```
+
+`GRAFANA_PORT=13000` 只是给 OpenIM 预留的监控地址参数，本项目默认不对外暴露这个端口，也不占用 `443`。
 
 ## 一句话说明部署方式
 
@@ -78,6 +79,7 @@ sudo bash deploy.sh
 7. 拉镜像并启动服务
 8. 检查容器状态
 9. 检查首页和 `/api/health`
+10. 输出当前域名、访问端口、健康检查地址和容器状态摘要
 
 ## VPS 首次部署
 
@@ -154,8 +156,32 @@ git pull && sudo bash update.sh
 8. 重建并重启服务
 9. 检查容器状态
 10. 检查首页和 `/api/health`
+11. 输出当前域名、访问端口、健康检查地址和容器状态摘要
+
+上面文档里我还是保留了：
+
+```bash
+git pull && sudo bash update.sh
+```
+
+这样你照着复制就能用。
+
+但要说明白一点：`update.sh` 脚本自己内部也会再执行一次 `git pull --ff-only`。  
+所以你以后直接这样跑也可以：
+
+```bash
+cd /opt/onlinemsg2
+sudo bash update.sh
+```
 
 如果你的 VPS 没装 `npm`，脚本会自动改用 Docker 里的 Node 容器安装和构建。
+
+本地前端开发默认还放行：
+
+```text
+http://127.0.0.1:5173
+http://localhost:5173
+```
 
 ## 常用命令
 
@@ -170,6 +196,13 @@ sudo bash deploy.sh
 ```bash
 cd /opt/onlinemsg2
 git pull && sudo bash update.sh
+```
+
+也可以直接：
+
+```bash
+cd /opt/onlinemsg2
+sudo bash update.sh
 ```
 
 看状态：

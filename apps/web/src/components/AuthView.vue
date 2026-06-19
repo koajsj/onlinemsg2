@@ -1,7 +1,12 @@
 <script setup>
 import { reactive, ref } from 'vue';
 import { apiRequest } from '../lib/api.js';
-import { generateAndStoreUserKeys, hasPrivateKeyPackage, unlockPrivateKey } from '../lib/e2ee.js';
+import {
+  createUserKeyBundle,
+  hasPrivateKeyPackage,
+  persistUserKeyBundle,
+  unlockPrivateKey
+} from '../lib/e2ee.js';
 
 const emit = defineEmits(['authenticated']);
 
@@ -22,16 +27,26 @@ const submit = async () => {
 
   try {
     if (mode.value === 'register') {
-      const publicKey = await generateAndStoreUserKeys(form.username, form.password);
+      const bundle = await createUserKeyBundle();
       const payload = await apiRequest('/auth/register', {
         method: 'POST',
         body: {
           username: form.username,
           password: form.password,
           nickname: form.nickname || form.username,
-          publicKey
+          publicKey: bundle.publicKey
         }
       });
+      try {
+        await persistUserKeyBundle({
+          username: form.username,
+          password: form.password,
+          privateJwk: bundle.privateJwk,
+          privateKey: bundle.privateKey
+        });
+      } catch (_persistError) {
+        hint.value = '账号已创建，但当前浏览器没有成功保存本地私钥。登录后请在设置页重新生成本机密钥。';
+      }
       emit('authenticated', payload);
       return;
     }

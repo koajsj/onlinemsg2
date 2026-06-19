@@ -117,6 +117,22 @@ const isStrongLocalPassword = password =>
   /[A-Za-z]/.test(password) &&
   /\d/.test(password);
 
+const mimeByExtension = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  zip: 'application/zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+};
+const allowedUploadMimeTypes = new Set(Object.values(mimeByExtension));
+
+const toErrorMessage = (input, fallback) => input?.message || fallback;
+
 const revokeAttachmentUrl = messageId => {
   if (!attachmentUrls[messageId]) {
     return;
@@ -124,6 +140,22 @@ const revokeAttachmentUrl = messageId => {
 
   URL.revokeObjectURL(attachmentUrls[messageId]);
   delete attachmentUrls[messageId];
+};
+
+const clearMessageAttachments = userId => {
+  const list = messagesByUser[userId] || [];
+  for (const item of list) {
+    revokeAttachmentUrl(item.id);
+  }
+};
+
+const resolveUploadMime = file => {
+  if (file.type) {
+    return file.type;
+  }
+
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+  return mimeByExtension[extension] || 'application/octet-stream';
 };
 
 const applyTheme = () => {
@@ -214,7 +246,7 @@ const ensureAttachment = async uiMessage => {
 
   const peer = contacts.value.find(item => item.userId === uiMessage.peerId);
   if (!peer) {
-    return;
+    throw new Error('未找到该联系人的加密信息');
   }
 
   const { key } = await ensureConversationKey({
@@ -235,16 +267,21 @@ const ensureAttachment = async uiMessage => {
   });
 
   if (!key) {
-    return;
+    throw new Error('当前设备还没有解锁会话密钥，无法读取附件');
   }
 
-  const objectUrl = await decryptFileUrl({
-    uploadId: uiMessage.uploadId,
-    iv: uiMessage.fileIv,
-    key,
-    token: props.session.token,
-    mimeType: uiMessage.mimeType
-  });
+  let objectUrl = '';
+  try {
+    objectUrl = await decryptFileUrl({
+      uploadId: uiMessage.uploadId,
+      iv: uiMessage.fileIv,
+      key,
+      token: props.session.token,
+      mimeType: uiMessage.mimeType
+    });
+  } catch (_error) {
+    throw new Error('附件解密失败，请确认当前设备私钥已解锁');
+  }
 
   revokeAttachmentUrl(uiMessage.id);
   attachmentUrls[uiMessage.id] = objectUrl;
@@ -275,11 +312,16 @@ const normalizeMessage = async raw => {
     fileName: payload.fileName || '',
     mimeType: payload.mimeType || '',
     size: payload.size || 0,
-    fileIv: payload.fileIv || ''
+    fileIv: payload.fileIv || '',
+    attachmentError: ''
   };
 
   if (message.kind === 'image') {
-    await ensureAttachment(message);
+    try {
+      await ensureAttachment(message);
+    } catch (attachmentError) {
+      message.attachmentError = toErrorMessage(attachmentError, '图片解密失败');
+    }
   }
 
   return message;
@@ -328,6 +370,7 @@ const loadConversationMessages = async userId => {
   );
 
   if (!conversation) {
+    clearMessageAttachments(userId);
     messagesByUser[userId] = messagesByUser[userId] || [];
     return;
   }
@@ -339,6 +382,7 @@ const loadConversationMessages = async userId => {
       startClientMsgID: '',
       count: 100
     });
+    clearMessageAttachments(userId);
     messagesByUser[userId] = [];
     await mergeMessages(response.data?.messageList || []);
     await sdk.markConversationMessageAsRead(conversation.conversationID);
@@ -348,10 +392,15 @@ const loadConversationMessages = async userId => {
 };
 
 const selectUser = async userId => {
-  activeUserId.value = userId;
-  mobileSection.value = 'chat';
-  await refreshConversations();
-  await loadConversationMessages(userId);
+  error.value = '';
+  try {
+    activeUserId.value = userId;
+    mobileSection.value = 'chat';
+    await refreshConversations();
+    await loadConversationMessages(userId);
+  } catch (selectError) {
+    error.value = selectError.message;
+  }
 };
 
 const sendEnvelope = async payload => {
@@ -413,6 +462,11 @@ const sendFile = async event => {
   sending.value = true;
   error.value = '';
   try {
+    const originalMime = resolveUploadMime(file);
+    if (!allowedUploadMimeTypes.has(originalMime)) {
+      throw new Error('当前只支持图片、PDF、TXT、ZIP、DOCX、XLSX 文件');
+    }
+
     const { key } = await ensureConversationKey({
       session: props.session,
       participants: secureParticipants.value,
@@ -421,10 +475,10 @@ const sendFile = async event => {
 
     const encryptedFile = await encryptFile(file, key);
     const formData = new FormData();
-    formData.append('category', file.type.startsWith('image/') ? 'image' : 'file');
+    formData.append('category', originalMime.startsWith('image/') ? 'image' : 'file');
     formData.append('peerUserId', activeContact.value.userId);
     formData.append('originalName', file.name);
-    formData.append('originalMime', file.type || 'application/octet-stream');
+    formData.append('originalMime', originalMime);
     formData.append('file', new File([encryptedFile.bytes], `${file.name}.bin`, { type: 'application/octet-stream' }));
     const uploadResp = await apiRequest('/uploads', {
       method: 'POST',
@@ -433,10 +487,10 @@ const sendFile = async event => {
     });
 
     await sendEnvelope({
-      kind: file.type.startsWith('image/') ? 'image' : 'file',
+      kind: originalMime.startsWith('image/') ? 'image' : 'file',
       uploadId: uploadResp.upload.id,
       fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
+      mimeType: originalMime,
       size: file.size,
       fileIv: encryptedFile.iv,
       secureConversationId: getSecureConversationId(currentUser.value.userId, activeContact.value.userId)
@@ -456,42 +510,52 @@ const revoke = async message => {
     return;
   }
 
-  await sdk.revokeMessage({
-    conversationID: message.conversationId,
-    clientMsgID: message.id
-  });
-  await loadConversationMessages(activeUserId.value);
+  error.value = '';
+  try {
+    await sdk.revokeMessage({
+      conversationID: message.conversationId,
+      clientMsgID: message.id
+    });
+    await loadConversationMessages(activeUserId.value);
+  } catch (revokeError) {
+    error.value = revokeError.message;
+  }
 };
 
 const saveProfile = async () => {
-  const response = await apiRequest('/users/me', {
-    method: 'PATCH',
-    token: props.session.token,
-    body: {
-      nickname: profileForm.nickname,
-      bio: profileForm.bio,
-      avatarUrl: profileForm.avatarUrl,
-      preferences: {
-        theme: profileForm.theme,
-        notifications: profileForm.notifications,
-        darkMode: profileForm.darkMode
+  error.value = '';
+  try {
+    const response = await apiRequest('/users/me', {
+      method: 'PATCH',
+      token: props.session.token,
+      body: {
+        nickname: profileForm.nickname,
+        bio: profileForm.bio,
+        avatarUrl: profileForm.avatarUrl,
+        preferences: {
+          theme: profileForm.theme,
+          notifications: profileForm.notifications,
+          darkMode: profileForm.darkMode
+        }
       }
-    }
-  });
+    });
 
-  emit('session-updated', {
-    ...props.session,
-    user: response.user
-  });
-  Object.assign(profileForm, {
-    nickname: response.user.nickname,
-    bio: response.user.bio || '',
-    avatarUrl: response.user.avatarUrl || '',
-    theme: response.user.preferences?.theme || 'system',
-    notifications: Boolean(response.user.preferences?.notifications ?? true),
-    darkMode: Boolean(response.user.preferences?.darkMode ?? false)
-  });
-  applyTheme();
+    emit('session-updated', {
+      ...props.session,
+      user: response.user
+    });
+    Object.assign(profileForm, {
+      nickname: response.user.nickname,
+      bio: response.user.bio || '',
+      avatarUrl: response.user.avatarUrl || '',
+      theme: response.user.preferences?.theme || 'system',
+      notifications: Boolean(response.user.preferences?.notifications ?? true),
+      darkMode: Boolean(response.user.preferences?.darkMode ?? false)
+    });
+    applyTheme();
+  } catch (saveError) {
+    error.value = saveError.message;
+  }
 };
 
 const updateCredentials = async () => {
@@ -549,6 +613,7 @@ const unlockEncryption = async () => {
     return;
   }
 
+  error.value = '';
   try {
     await unlockPrivateKey(currentUser.value.username, unlockPassword.value);
     unlockPassword.value = '';
@@ -566,6 +631,7 @@ const setupEncryption = async () => {
     return;
   }
 
+  error.value = '';
   try {
     const publicKey = await generateAndStoreUserKeys(currentUser.value.username, setupPassword.value);
     const response = await apiRequest('/users/me', {
@@ -586,15 +652,33 @@ const setupEncryption = async () => {
 };
 
 const openFile = async message => {
-  if (!attachmentUrls[message.id]) {
+  error.value = '';
+  try {
+    if (!attachmentUrls[message.id]) {
+      await ensureAttachment(message);
+      message.attachmentError = '';
+    }
+
+    if (!attachmentUrls[message.id]) {
+      throw new Error('附件还没有成功加载');
+    }
+
+    window.open(attachmentUrls[message.id], '_blank', 'noopener,noreferrer');
+  } catch (openError) {
+    message.attachmentError = toErrorMessage(openError, '附件打开失败');
+    error.value = message.attachmentError;
+  }
+};
+
+const loadAttachment = async message => {
+  error.value = '';
+  try {
     await ensureAttachment(message);
+    message.attachmentError = '';
+  } catch (attachmentError) {
+    message.attachmentError = toErrorMessage(attachmentError, '附件加载失败');
+    error.value = message.attachmentError;
   }
-
-  if (!attachmentUrls[message.id]) {
-    return;
-  }
-
-  window.open(attachmentUrls[message.id], '_blank', 'noopener,noreferrer');
 };
 
 const loadAdmin = async () => {
@@ -660,20 +744,28 @@ onMounted(async () => {
     onlineMap[event.data.userID] = event.data.status;
   });
   registerEvent(CbEvents.OnRecvNewMessages, async event => {
-    const incoming = event.data || [];
-    await mergeMessages(incoming);
-    const hasActiveConversationMessage = incoming.some(raw => {
-      const peerId = raw.sendID === currentUser.value.userId ? raw.recvID : raw.sendID;
-      return peerId === activeUserId.value && activeConversation.value?.conversationID;
-    });
-    if (hasActiveConversationMessage && activeConversation.value?.conversationID) {
-      await sdk.markConversationMessageAsRead(activeConversation.value.conversationID);
+    try {
+      const incoming = event.data || [];
+      await mergeMessages(incoming);
+      const hasActiveConversationMessage = incoming.some(raw => {
+        const peerId = raw.sendID === currentUser.value.userId ? raw.recvID : raw.sendID;
+        return peerId === activeUserId.value && activeConversation.value?.conversationID;
+      });
+      if (hasActiveConversationMessage && activeConversation.value?.conversationID) {
+        await sdk.markConversationMessageAsRead(activeConversation.value.conversationID);
+      }
+      await refreshConversations();
+    } catch (eventError) {
+      error.value = toErrorMessage(eventError, '新消息处理失败');
     }
-    await refreshConversations();
   });
   registerEvent(CbEvents.OnNewRecvMessageRevoked, async () => {
-    if (activeUserId.value) {
-      await loadConversationMessages(activeUserId.value);
+    try {
+      if (activeUserId.value) {
+        await loadConversationMessages(activeUserId.value);
+      }
+    } catch (eventError) {
+      error.value = toErrorMessage(eventError, '撤回消息同步失败');
     }
   });
 
@@ -770,13 +862,17 @@ watch(
               <div class="message-bubble" :class="message.kind">
                 <template v-if="message.kind === 'image'">
                   <img v-if="attachmentUrls[message.id]" :src="attachmentUrls[message.id]" alt="图片消息" class="message-image">
-                  <button v-else class="inline-link" type="button" @click="ensureAttachment(message)">加载图片</button>
+                  <template v-else>
+                    <button class="inline-link" type="button" @click="loadAttachment(message)">加载图片</button>
+                    <span v-if="message.attachmentError" class="attachment-error">{{ message.attachmentError }}</span>
+                  </template>
                 </template>
                 <template v-else-if="message.kind === 'file'">
                   <button class="file-chip" type="button" @click="openFile(message)">
                     <strong>{{ message.fileName }}</strong>
                     <span>{{ Math.ceil(message.size / 1024) }} KB</span>
                   </button>
+                  <span v-if="message.attachmentError" class="attachment-error">{{ message.attachmentError }}</span>
                 </template>
                 <template v-else>
                   {{ message.body }}

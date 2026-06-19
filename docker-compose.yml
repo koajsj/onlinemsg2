@@ -40,9 +40,6 @@ services:
   etcd:
     image: "${ETCD_IMAGE}"
     container_name: private-chat-etcd
-    ports:
-      - "12379:2379"
-      - "12380:2380"
     environment:
       ETCD_NAME: s1
       ETCD_DATA_DIR: /etcd-data

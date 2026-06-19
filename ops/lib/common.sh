@@ -2,6 +2,13 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 ENV_EXAMPLE_FILE="${ENV_EXAMPLE_FILE:-$ROOT_DIR/.env.example}"
 COMMON_SCRIPT_NAME="${COMMON_SCRIPT_NAME:-脚本}"
 APT_UPDATED="${APT_UPDATED:-0}"
+CURRENT_STAGE="${CURRENT_STAGE:-初始化}"
+
+set_stage() {
+  CURRENT_STAGE="$1"
+  echo
+  echo "==> $CURRENT_STAGE"
+}
 
 require_command() {
   local command_name="$1"
@@ -14,6 +21,63 @@ require_command() {
 
 is_root() {
   [ "$(id -u)" -eq 0 ]
+}
+
+has_repo_owner_context() {
+  is_root && [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ] && [ "${SUDO_UID:-0}" != "0" ]
+}
+
+repo_owner_uid() {
+  if has_repo_owner_context; then
+    printf '%s' "$SUDO_UID"
+    return
+  fi
+
+  id -u
+}
+
+repo_owner_gid() {
+  if has_repo_owner_context; then
+    printf '%s' "$SUDO_GID"
+    return
+  fi
+
+  id -g
+}
+
+repo_owner_home() {
+  if has_repo_owner_context && command -v getent >/dev/null 2>&1; then
+    getent passwd "$SUDO_USER" | cut -d: -f6
+    return
+  fi
+
+  printf '%s' "$HOME"
+}
+
+run_as_repo_owner() {
+  if has_repo_owner_context && command -v sudo >/dev/null 2>&1; then
+    sudo -H -u "#$(repo_owner_uid)" -g "#$(repo_owner_gid)" \
+      env HOME="$(repo_owner_home)" \
+      "$@"
+    return
+  fi
+
+  "$@"
+}
+
+run_node_container_as_repo_owner() {
+  docker run --rm \
+    -u "$(repo_owner_uid):$(repo_owner_gid)" \
+    -v "$ROOT_DIR:/app" \
+    -w /app \
+    node:22-bookworm-slim \
+    "$@"
+}
+
+ensure_repo_owner_workspace_permissions() {
+  if has_repo_owner_context; then
+    chown -R "$(repo_owner_uid):$(repo_owner_gid)" "$ROOT_DIR"
+  fi
 }
 
 ensure_apt_package() {
@@ -73,6 +137,25 @@ ensure_base_environment() {
 
   if ! docker compose version >/dev/null 2>&1; then
     echo "docker compose 插件不可用，请检查 Docker 安装结果。" >&2
+    exit 1
+  fi
+
+  ensure_docker_daemon
+}
+
+ensure_docker_daemon() {
+  if docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now docker >/dev/null 2>&1 || true
+  elif command -v service >/dev/null 2>&1; then
+    service docker start >/dev/null 2>&1 || true
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker 已安装，但 Docker daemon 没有正常运行。" >&2
     exit 1
   fi
 }
@@ -209,7 +292,7 @@ auto_fill_env() {
 
   frontend_port="${frontend_port:-8080}"
   minio_port="${minio_port:-10005}"
-  allowed_origins="http://127.0.0.1:${frontend_port},http://localhost:${frontend_port},http://${app_domain}:${frontend_port},http://${app_domain}"
+  allowed_origins="http://127.0.0.1:${frontend_port},http://localhost:${frontend_port},http://127.0.0.1:5173,http://localhost:5173,http://${app_domain}:${frontend_port},http://${app_domain}"
   set_env_value APP_ALLOWED_ORIGINS "$allowed_origins"
   set_env_value MINIO_EXTERNAL_ADDRESS "http://${server_public_host}:${minio_port}"
 }
@@ -228,6 +311,11 @@ assert_service_running() {
     docker compose ps >&2
     exit 1
   fi
+}
+
+compose_service_exists() {
+  local service_name="$1"
+  docker compose ps -a --services 2>/dev/null | grep -qx "$service_name"
 }
 
 port_in_use() {
@@ -260,6 +348,16 @@ check_port_free() {
   fi
 }
 
+check_port_free_for_service() {
+  local port="$1"
+  local label="$2"
+  local service_name="$3"
+  if compose_service_exists "$service_name"; then
+    return
+  fi
+  check_port_free "$port" "$label"
+}
+
 http_probe_once() {
   local url="$1"
   if command -v curl >/dev/null 2>&1; then
@@ -290,4 +388,15 @@ wait_for_http() {
 
   echo "$label 探测失败：$url" >&2
   exit 1
+}
+
+print_runtime_summary() {
+  echo
+  echo "状态摘要："
+  echo "  域名: ${APP_DOMAIN:-257823.xyz}"
+  echo "  前端地址: http://${APP_DOMAIN:-服务器IP}:${FRONTEND_PORT:-8080}"
+  echo "  API 健康检查: http://127.0.0.1:${FRONTEND_PORT:-8080}/api/health"
+  echo "  OpenIM WebSocket: ${OPENIM_MSG_GATEWAY_PORT:-10001}"
+  echo "  OpenIM API: ${OPENIM_API_PORT:-10002}"
+  docker compose ps
 }

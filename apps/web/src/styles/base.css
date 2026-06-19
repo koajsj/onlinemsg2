@@ -550,6 +550,12 @@ textarea {
   text-decoration: underline;
 }
 
+.attachment-error {
+  color: #d92d20;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     padding: 0;
@@ -609,6 +615,11 @@ textarea {
   .right-pane,
   .left-pane {
     border: 0;
+  }
+
+  .contact-list,
+  .right-pane {
+    padding-bottom: 96px;
   }
 
   .composer {

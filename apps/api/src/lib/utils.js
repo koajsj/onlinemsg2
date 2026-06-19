@@ -4,6 +4,8 @@ import { UAParser } from 'ua-parser-js';
 export const nowIso = () => new Date().toISOString();
 export const createId = (prefix = '') => `${prefix}${crypto.randomUUID()}`;
 export const createOperationId = () => `${Date.now()}-${crypto.randomUUID()}`;
+export const getSecureConversationId = (left, right) =>
+  [left, right].sort((a, b) => a.localeCompare(b)).join('__');
 
 export const cleanText = (value, maxLength = 200) => {
   const text = String(value || '')

@@ -53,6 +53,17 @@ const derivePasswordKey = async (password, salt) => {
 };
 
 const privateKeyStorageKey = username => `${PRIVATE_KEY_PREFIX}${username.toLowerCase()}`;
+const importPrivateKey = privateJwk =>
+  crypto.subtle.importKey(
+    'jwk',
+    privateJwk,
+    {
+      name: 'RSA-OAEP',
+      hash: 'SHA-256'
+    },
+    true,
+    ['decrypt']
+  );
 
 const exportUnlockedPrivateJwk = async username => {
   const privateKey = getUnlockedPrivateKey(username);
@@ -86,7 +97,7 @@ const writePrivateKeyPackage = async (username, privateJwk, password) => {
 export const hasPrivateKeyPackage = username => Boolean(localStorage.getItem(privateKeyStorageKey(username)));
 export const isPrivateKeyUnlocked = username => privateKeys.has(username.toLowerCase());
 
-export const generateAndStoreUserKeys = async (username, password) => {
+export const createUserKeyBundle = async () => {
   const pair = await crypto.subtle.generateKey(
     {
       name: 'RSA-OAEP',
@@ -100,26 +111,27 @@ export const generateAndStoreUserKeys = async (username, password) => {
 
   const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
-  const salt = randomBytes(16);
-  const iv = randomBytes(12);
-  const key = await derivePasswordKey(password, salt);
-  const cipher = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encoder.encode(JSON.stringify(privateJwk))
-  );
+  return {
+    publicKey: JSON.stringify(publicJwk),
+    privateJwk,
+    privateKey: pair.privateKey
+  };
+};
 
-  localStorage.setItem(
-    privateKeyStorageKey(username),
-    JSON.stringify({
-      salt: toBase64(salt),
-      iv: toBase64(iv),
-      cipher: toBase64(cipher)
-    })
-  );
+export const persistUserKeyBundle = async ({ username, password, privateJwk, privateKey }) => {
+  await writePrivateKeyPackage(username, privateJwk, password);
+  privateKeys.set(username.toLowerCase(), privateKey || (await importPrivateKey(privateJwk)));
+};
 
-  privateKeys.set(username.toLowerCase(), pair.privateKey);
-  return JSON.stringify(publicJwk);
+export const generateAndStoreUserKeys = async (username, password) => {
+  const bundle = await createUserKeyBundle();
+  await persistUserKeyBundle({
+    username,
+    password,
+    privateJwk: bundle.privateJwk,
+    privateKey: bundle.privateKey
+  });
+  return bundle.publicKey;
 };
 
 export const unlockPrivateKey = async (username, password) => {
@@ -137,16 +149,7 @@ export const unlockPrivateKey = async (username, password) => {
   );
 
   const privateJwk = JSON.parse(decoder.decode(clear));
-  const privateKey = await crypto.subtle.importKey(
-    'jwk',
-    privateJwk,
-    {
-      name: 'RSA-OAEP',
-      hash: 'SHA-256'
-    },
-    true,
-    ['decrypt']
-  );
+  const privateKey = await importPrivateKey(privateJwk);
 
   privateKeys.set(username.toLowerCase(), privateKey);
   return true;
